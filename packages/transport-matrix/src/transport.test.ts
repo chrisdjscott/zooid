@@ -57,7 +57,11 @@ const baseAgents = [
   },
 ]
 
-function makeTransport(drain?: { drainQuietMs?: number; drainMaxMs?: number }) {
+function makeTransport(drain?: {
+  drainQuietMs?: number
+  drainMaxMs?: number
+  drainNoStreamMs?: number
+}) {
   const { reg, finishPrompt } = fakeRegistry()
   const approvals = fakeApprovals()
   const client = fakeClient()
@@ -72,6 +76,7 @@ function makeTransport(drain?: { drainQuietMs?: number; drainMaxMs?: number }) {
     // Tests covering trailing-chunk behavior pass an explicit window.
     drainQuietMs: drain?.drainQuietMs ?? 0,
     drainMaxMs: drain?.drainMaxMs,
+    drainNoStreamMs: drain?.drainNoStreamMs,
   })
   return { transport, agents: reg, approvals, client, finishPrompt }
 }
@@ -235,6 +240,71 @@ describe('matrix transport /transactions', () => {
         content: expect.objectContaining({ body: 'Hi. How can I help?' }),
       }),
     )
+  })
+
+  const topLevelMention = () => ({
+    type: 'm.room.message',
+    event_id: '$root',
+    room_id: '!r:example.com',
+    sender: '@alice:example.com',
+    content: {
+      msgtype: 'm.text',
+      body: 'hi',
+      'm.mentions': { user_ids: ['@architect:example.com'] },
+    },
+  })
+  const turnEnds = (client: ReturnType<typeof makeTransport>['client']) =>
+    client.sendCustomEvent.mock.calls
+      .map((c) => c[0] as { eventType: string; content: Record<string, unknown> })
+      .filter((c) => c.eventType === 'dev.zooid.turn.end')
+
+  it('ends a silent turn at the no-stream bound, not the drain cap', async () => {
+    // [[ZOD076]] smoke: end_turn with no output held typing and turn.end for the
+    // full 30s cap. Nothing arrives, so the no-stream bound ends the drain.
+    const { transport, agents, client } = makeTransport({
+      drainQuietMs: 10,
+      drainNoStreamMs: 60,
+      drainMaxMs: 5_000,
+    })
+    agents.prompt.mockImplementation(async () => ({ stopReason: 'end_turn' as const }))
+    const started = Date.now()
+    await postTxn(transport.app, { events: [topLevelMention()] })
+    await vi.waitFor(() => expect(turnEnds(client)).toHaveLength(1), { timeout: 1_000 })
+    expect(Date.now() - started).toBeLessThan(1_000)
+
+    const [turnEnd] = turnEnds(client)
+    expect(turnEnd.content.produced_output).toBe(false)
+    expect(client.sendMessage).not.toHaveBeenCalled()
+    // typing.exit precedes the turn.end send ([[ZOD091]]).
+    const typingOff = client.setTyping.mock.invocationCallOrder.at(-1)!
+    expect(typingOff).toBeLessThan(client.sendCustomEvent.mock.invocationCallOrder.at(-1)!)
+  })
+
+  it('still collects a chunk that starts after prompt() resolves and a quiet gap (opencode late start)', async () => {
+    const { transport, agents, client } = makeTransport({
+      drainQuietMs: 10,
+      drainNoStreamMs: 300,
+      drainMaxMs: 5_000,
+    })
+    agents.prompt.mockImplementation(async (_name: string, p: { threadId: string }) => {
+      // Nothing during the turn; the stream starts well after prompt resolves
+      // and after several empty quiet windows.
+      setTimeout(() => {
+        agents.onEvent('architect', {
+          type: 'agent_message_chunk',
+          sessionId: 'sess-' + p.threadId,
+          content: { type: 'text', text: 'late reply' },
+        })
+      }, 100)
+      return { stopReason: 'end_turn' as const }
+    })
+    await postTxn(transport.app, { events: [topLevelMention()] })
+    await vi.waitFor(() => expect(turnEnds(client)).toHaveLength(1), { timeout: 2_000 })
+
+    expect(client.sendMessage).toHaveBeenCalledWith(
+      expect.objectContaining({ content: expect.objectContaining({ body: 'late reply' }) }),
+    )
+    expect(turnEnds(client)[0].content.produced_output).toBe(true)
   })
 
   it('uses an in-thread message event_id as the thread root when one is set', async () => {

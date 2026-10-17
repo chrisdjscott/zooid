@@ -106,6 +106,10 @@ export interface CreateMatrixTransportOptions {
   drainQuietMs?: number
   /** Hard cap on the post-turn drain. Defaults to `DRAIN_MAX_MS`. */
   drainMaxMs?: number
+  /** Tighter cap on the post-turn drain while no chunk has arrived and nothing
+   *  was flushed (a silent turn, or a stream that has not started). Defaults to
+   *  `DRAIN_NO_STREAM_MS`; `drainMaxMs` still caps it. */
+  drainNoStreamMs?: number
   /** Injected media client for downloading/uploading Matrix media. */
   media?: MediaClientLike
   /** Injected attachment writer (defaults to the real writeAttachment). */
@@ -325,6 +329,12 @@ const DRAIN_QUIET_MS = 300
 // after that. The drain still short-circuits via DRAIN_QUIET_MS once any
 // content has settled, so this cap only kicks in for genuinely-stuck turns.
 const DRAIN_MAX_MS = 30_000
+// Bound while nothing has arrived at all: no chunk buffered, nothing flushed.
+// A genuinely silent turn (the agent returned end_turn and has nothing to say)
+// looks identical to opencode's late start from here, so this must outlast the
+// longest late start seen (15s, commit 4aab452) or it truncates real replies.
+// 20s = that 15s plus 5s margin. Once any chunk lands, only DRAIN_MAX_MS applies.
+const DRAIN_NO_STREAM_MS = 20_000
 
 const delay = (ms: number): Promise<void> => new Promise((r) => setTimeout(r, ms))
 
@@ -346,6 +356,7 @@ export function createMatrixTransport(opts: CreateMatrixTransportOptions) {
   } = opts
   const drainQuietMs = opts.drainQuietMs ?? DRAIN_QUIET_MS
   const drainMaxMs = opts.drainMaxMs ?? DRAIN_MAX_MS
+  const drainNoStreamMs = Math.min(opts.drainNoStreamMs ?? DRAIN_NO_STREAM_MS, drainMaxMs)
   const returnGraceMs = opts.returnGraceMs ?? RETURN_GRACE_MS
   const remoteReturnGraceMs = opts.remoteReturnGraceMs ?? REMOTE_RETURN_GRACE_MS
   const mediaClient = opts.media
@@ -1449,8 +1460,9 @@ export function createMatrixTransport(opts: CreateMatrixTransportOptions) {
       // *before* the agent_message_chunk stream starts. So the buffer can be
       // empty for several seconds after prompt resolves, and only then do the
       // chunks arrive. We can't break the drain just because the buffer is
-      // empty — we have to wait up to drainMaxMs for chunks to *start*. Once
-      // any content arrives, the "quiet for drainQuietMs" rule kicks in.
+      // empty — we have to wait for chunks to *start*, up to drainNoStreamMs
+      // (a silent turn ends there). Once any content arrives, the "quiet for
+      // drainQuietMs" rule kicks in, capped by drainMaxMs.
       const drainStart = Date.now()
       let drained = buffers.get(sessionId) ?? ''
       while (drainQuietMs > 0 && Date.now() - drainStart < drainMaxMs) {
@@ -1461,8 +1473,10 @@ export function createMatrixTransport(opts: CreateMatrixTransportOptions) {
         // (so an empty, quiet buffer means the turn is genuinely done — the
         // last message was flushed mid-stream). An unchanged *empty* buffer
         // with nothing flushed yet means the stream hasn't started; keep
-        // waiting up to drainMaxMs.
-        if (next === drained && (next.length > 0 || (flushedCounts.get(sessionId) ?? 0) > 0)) break
+        // waiting, but only up to drainNoStreamMs.
+        const streamStarted = next.length > 0 || (flushedCounts.get(sessionId) ?? 0) > 0
+        if (next === drained && streamStarted) break
+        if (!streamStarted && Date.now() - drainStart >= drainNoStreamMs) break
         drained = next
       }
       // Flush the final assistant message — the one with no following messageId
