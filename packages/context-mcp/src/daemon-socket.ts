@@ -165,7 +165,21 @@ async function handleLine(
       result = await binding.provider.getRecentThreads(channelId, req.params)
     } else if (req.method === 'getThreadHistory') {
       const threadId = String(req.params.threadId ?? '')
-      result = await binding.provider.getThreadHistory(channelId, threadId, req.params)
+      // An explicit room replaces the ambient one, but only after the
+      // caller's own bindings vouch for it, and before any transport read
+      // ([[ZOD084]]). Membership is the only application-level gate.
+      const room = typeof req.params.room === 'string' && req.params.room ? req.params.room : undefined
+      const target = room === undefined ? channelId : binding.provider.resolveRoom?.(room)
+      if (target === undefined) {
+        socket.write(
+          JSON.stringify({
+            ok: false,
+            error: `not_in_room: this agent is not a member of ${room}`,
+          } satisfies DaemonError) + '\n',
+        )
+        return
+      }
+      result = await binding.provider.getThreadHistory(target, threadId, req.params)
     } else if (req.method === 'getChannelMembers') {
       result = await binding.provider.getChannelMembers(channelId)
     } else if (req.method === 'getRoomInfo') {

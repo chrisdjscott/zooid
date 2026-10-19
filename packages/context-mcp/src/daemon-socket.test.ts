@@ -1,4 +1,4 @@
-import { describe, it, expect, afterEach } from 'vitest'
+import { describe, it, expect, afterEach, vi } from 'vitest'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { randomUUID } from 'node:crypto'
@@ -465,3 +465,76 @@ describe('daemon-socket caller identity', () => {
 })
 
 const NOT_OWNED = 'binding not owned by caller'
+
+describe('daemon-socket explicit-room getThreadHistory ([[ZOD084]])', () => {
+  const boundRooms: Record<string, string> = { '!joined:hs': '!joined:hs', '#joined:hs': '!joined:hs' }
+
+  async function serve(provider: TransportContextProvider) {
+    const registry = new SpawnRegistry()
+    const spawnId = registry.register({
+      agentName: 'a',
+      threadRef: { channelId: '!ambient:hs', threadId: 't' },
+      provider,
+    })
+    const sockPath = join(tmpdir(), `zooid-test-${randomUUID()}.sock`)
+    const server = await startDaemonSocketServer({ sockPath, registry, agentName: 'a' })
+    cleanup.push(() => server.close())
+    return { spawnId, sockPath }
+  }
+
+  it('reads the named room, resolving an alias to its canonical ID', async () => {
+    const getThreadHistory = vi.fn(async (_c: string, threadId: string) => ({
+      messages: [{ id: threadId, sender: 'alice', text: 'root', timestamp: 'T', is_agent: false }],
+      has_more: false,
+    }))
+    const { spawnId, sockPath } = await serve(
+      fakeProvider({ getThreadHistory, resolveRoom: (s) => boundRooms[s] }),
+    )
+    const page = (await callDaemon(sockPath, {
+      spawnId,
+      method: 'getThreadHistory',
+      params: { threadId: '$root', room: '#joined:hs' },
+    })) as { messages: Array<{ id: string }> }
+    expect(page.messages[0]!.id).toBe('$root')
+    expect(getThreadHistory).toHaveBeenCalledTimes(1)
+    expect(getThreadHistory.mock.calls[0]![0]).toBe('!joined:hs')
+    expect(getThreadHistory.mock.calls[0]![1]).toBe('$root')
+  })
+
+  it('returns not_in_room and never reaches the provider for a room the agent has not joined', async () => {
+    const getThreadHistory = vi.fn(async () => ({ messages: [], has_more: false }))
+    const { spawnId, sockPath } = await serve(
+      fakeProvider({ getThreadHistory, resolveRoom: (s) => boundRooms[s] }),
+    )
+    await expect(
+      callDaemon(sockPath, {
+        spawnId,
+        method: 'getThreadHistory',
+        params: { threadId: '$root', room: '!elsewhere:hs' },
+      }),
+    ).rejects.toThrow('not_in_room: this agent is not a member of !elsewhere:hs')
+    expect(getThreadHistory).not.toHaveBeenCalled()
+  })
+
+  it('refuses an explicit room when the provider cannot resolve rooms', async () => {
+    const getThreadHistory = vi.fn(async () => ({ messages: [], has_more: false }))
+    const { spawnId, sockPath } = await serve(fakeProvider({ getThreadHistory }))
+    await expect(
+      callDaemon(sockPath, {
+        spawnId,
+        method: 'getThreadHistory',
+        params: { threadId: '$root', room: '!joined:hs' },
+      }),
+    ).rejects.toThrow(/not_in_room/)
+    expect(getThreadHistory).not.toHaveBeenCalled()
+  })
+
+  it('keeps reading the ambient room when room is omitted', async () => {
+    const getThreadHistory = vi.fn(async () => ({ messages: [], has_more: false }))
+    const resolveRoom = vi.fn()
+    const { spawnId, sockPath } = await serve(fakeProvider({ getThreadHistory, resolveRoom }))
+    await callDaemon(sockPath, { spawnId, method: 'getThreadHistory', params: { threadId: '$root' } })
+    expect(getThreadHistory.mock.calls[0]![0]).toBe('!ambient:hs')
+    expect(resolveRoom).not.toHaveBeenCalled()
+  })
+})

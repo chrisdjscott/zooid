@@ -345,9 +345,13 @@ export class MatrixContextProvider implements TransportContextProvider {
     )
   }
 
+  resolveRoom(selector: string): string | undefined {
+    return resolveBoundRoom(this.opts.rooms ?? [], selector)
+  }
+
   async sendMessage(input: SendMessageInput): Promise<SendMessageResult> {
     const rooms = this.opts.rooms ?? []
-    const roomId = resolveBoundRoom(rooms, input.room)
+    const roomId = this.resolveRoom(input.room)
     if (!roomId) {
       const bound = rooms.map((r) => r.alias).join(', ') || 'none'
       throw new Error(

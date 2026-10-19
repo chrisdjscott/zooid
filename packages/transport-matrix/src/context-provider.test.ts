@@ -410,6 +410,48 @@ describe('MatrixContextProvider', () => {
     )
   })
 
+  describe('explicit-room thread reads ([[ZOD084]])', () => {
+    const rooms = [{ alias: '!a:hs', configuredAlias: '#a:hs' }]
+
+    it('resolveRoom maps ID and alias to the canonical ID without touching the homeserver', () => {
+      const client = fakeClient()
+      const provider = new MatrixContextProvider({
+        client,
+        asUserId: '@architect:hs',
+        agentBots: new Map(),
+        rooms,
+      })
+      expect(provider.resolveRoom('!a:hs')).toBe('!a:hs')
+      expect(provider.resolveRoom('#a:hs')).toBe('!a:hs')
+      expect(provider.resolveRoom('!elsewhere:hs')).toBeUndefined()
+      for (const fn of Object.values(client)) expect(fn).not.toHaveBeenCalled()
+    })
+
+    it('getThreadHistory reads the room it is given, as the agent', async () => {
+      const fetchEvent = vi.fn().mockResolvedValue({
+        event_id: '$root',
+        sender: '@alice:hs',
+        origin_server_ts: 1000,
+        type: 'm.room.message',
+        content: { msgtype: 'm.text', body: 'root' },
+      })
+      const fetchThreadRelations = vi.fn().mockResolvedValue({ chunk: [threadReply('$r1')] })
+      const provider = new MatrixContextProvider({
+        client: fakeClient({ fetchEvent, fetchThreadRelations } as unknown as Partial<MatrixClient>),
+        asUserId: '@architect:hs',
+        agentBots: new Map(),
+        rooms,
+      })
+      const roomId = provider.resolveRoom('#a:hs')!
+      const page = await provider.getThreadHistory(roomId, '$root', {})
+      expect(page.messages.map((m) => m.id)).toEqual(['$root', '$r1'])
+      expect(fetchEvent).toHaveBeenCalledWith('!a:hs', '$root', '@architect:hs')
+      expect(fetchThreadRelations).toHaveBeenCalledWith(
+        expect.objectContaining({ roomId: '!a:hs', asUserId: '@architect:hs' }),
+      )
+    })
+  })
+
   describe('sendMessage after bootstrap rewrote the binding (#104)', () => {
     async function bootstrapped(configured: string[]) {
       const rooms = configured.map((alias) => ({ alias }))

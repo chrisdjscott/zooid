@@ -149,16 +149,17 @@ export function buildContextMcpServer(opts: BuildContextMcpServerOpts): McpServe
 
   server.tool(
     'zooid_get_thread_history',
-    'Drill into a specific thread: the root message followed by all replies in chronological order. Pass the `thread_id` from a `zooid_get_recent_threads` entry or a `Message.thread_id` from `zooid_get_history`.',
+    'Drill into a specific thread: the root message followed by all replies in chronological order. Pass the `thread_id` from a `zooid_get_recent_threads` entry or a `Message.thread_id` from `zooid_get_history`. Reads the current room unless `room` (room ID or alias, as listed by `zooid_get_rooms`) names another room this agent is a member of; a room it is not in returns `not_in_room`.',
     {
+      room: z.string().optional(),
       thread_id: z.string(),
       limit: z.number().int().positive().optional(),
       before: z.string().optional(),
     },
-    async ({ thread_id, limit, before }) => {
+    async ({ room, thread_id, limit, before }) => {
       const provider = await opts.resolve()
       const clamped = Math.min(limit ?? DEFAULT_LIMIT, MAX_LIMIT)
-      const page = await provider.getThreadHistory('', thread_id, {
+      const page = await provider.getThreadHistory(room ?? '', thread_id, {
         limit: clamped,
         before,
       })

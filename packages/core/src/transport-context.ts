@@ -103,5 +103,13 @@ export interface TransportContextProvider {
   getRoomInfo(channelId: string): Promise<RoomInfo>
   /** Rooms this agent is bound to. Targets for sendMessage. */
   getRooms(): Promise<RoomInfo[]>
+  /**
+   * Resolve an agent-supplied room selector (canonical ID or configured alias)
+   * against this agent's own bindings, locally: no transport read. Returns
+   * the canonical room ID, or undefined when the agent is not in that room.
+   * Absent = the provider cannot name rooms, so an explicit-room read is
+   * refused ([[ZOD084]]).
+   */
+  resolveRoom?(selector: string): string | undefined
   sendMessage(input: SendMessageInput): Promise<SendMessageResult>
 }
