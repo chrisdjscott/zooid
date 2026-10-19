@@ -395,10 +395,10 @@ function buildContextSpawns(
         hostDir === undefined
           ? undefined
           : kind === 'local'
-            ? { hostDir, agentPath: hostDir }
+            ? { hostDir, agentPath: hostDir, confined: false }
             : (agent.container?.disable_mounts ?? []).includes('workspace')
               ? undefined
-              : { hostDir, agentPath: CONTAINER_WORKDIR }
+              : { hostDir, agentPath: CONTAINER_WORKDIR, confined: isContainerRuntime(kind) }
       const provider: TransportContextProvider = new MatrixContextProvider({
         client,
         asUserId: agent.matrix.user_id,

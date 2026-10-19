@@ -917,7 +917,11 @@ describe('sendAttachment', () => {
       ...(opts.omit === 'media' ? {} : { media: { upload, download: vi.fn() } }),
       ...(opts.omit === 'workspace'
         ? {}
-        : { workspace: { hostDir: dir, agentPath: opts.agentPath ?? dir } }),
+        : { workspace: {
+            hostDir: dir,
+            agentPath: opts.agentPath ?? dir,
+            confined: opts.agentPath !== undefined,
+          } }),
     })
     return { dir, provider, sendMessage, sendCustomEvent, upload }
   }

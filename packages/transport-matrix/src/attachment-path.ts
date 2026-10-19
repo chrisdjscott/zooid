@@ -8,20 +8,23 @@ function within(child: string, parent: string, sepChar: string): boolean {
 /**
  * Map a path as the agent sees it to a host path ([[ZOD068]]).
  *
- * Local agents (`hostDir === agentPath`): relative paths resolve against the
- * workdir, absolute paths are read as-is, no confinement.
+ * Unconfined (local) agents: relative paths resolve against the workdir,
+ * absolute paths are read as-is.
  *
- * Container agents: the path must sit under `agentPath` (`/workspace`), and
- * the mapped host path's realpath must stay inside the workdir's realpath so
- * a planted symlink can't reach the host. Throws `Error(reason)` on refusal.
+ * Confined (container) agents: the path must sit under `agentPath`
+ * (`/workspace`), and the mapped host path's realpath must stay inside the
+ * workdir's realpath so a planted symlink can't reach the host. The realpath
+ * that was checked is what's returned, so the caller's read opens a path with
+ * no symlinks in it. Throws `Error(reason)` on refusal.
  */
 export function resolveAttachmentPath(input: {
   path: string
   hostDir: string
   agentPath: string
+  confined: boolean
 }): string {
-  const { path, hostDir, agentPath } = input
-  if (hostDir === agentPath) return resolve(hostDir, path)
+  const { path, hostDir, agentPath, confined } = input
+  if (!confined) return resolve(hostDir, path)
 
   const outside = () =>
     new Error(
@@ -31,8 +34,8 @@ export function resolveAttachmentPath(input: {
   if (!within(normalised, posix.normalize(agentPath), '/')) throw outside()
 
   const mapped = resolve(hostDir, posix.relative(agentPath, normalised))
-  if (existsSync(mapped)) {
-    if (!within(realpathSync(mapped), realpathSync(hostDir), sep)) throw outside()
-  }
-  return mapped
+  if (!existsSync(mapped)) return mapped
+  const real = realpathSync(mapped)
+  if (!within(real, realpathSync(hostDir), sep)) throw outside()
+  return real
 }

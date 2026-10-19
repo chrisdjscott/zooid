@@ -103,7 +103,7 @@ describe.skipIf(!dockerAvailable())('MatrixContextProvider.sendAttachment agains
       asUserId: AGENT,
       agentBots: new Map([[AGENT, 'attach-agent']]),
       media,
-      workspace: { hostDir: workdir, agentPath: workdir },
+      workspace: { hostDir: workdir, agentPath: workdir, confined: false },
     })
   }, 120_000)
 

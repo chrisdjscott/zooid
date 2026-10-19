@@ -152,6 +152,18 @@ describe('buildAcpRegistry — zooid_send_attachment wiring [ZOD068]', () => {
     expect(spec.args).toContain('--send-attachment')
   })
 
+  it.each([
+    ['local', matrixCfg, false],
+    ['podman', podmanCfg(), true],
+  ] as const)('confines the %s agent by runtime: %s', async (_kind, cfg, confined) => {
+    const { register, opts } = optsWith()
+    await buildAcpRegistry(cfg, opts).opts.contextSpawns!.architect!('!r:hs')
+    const input = register.mock.calls[0]![0] as {
+      provider: { opts: { workspace: { confined: boolean } } }
+    }
+    expect(input.provider.opts.workspace.confined).toBe(confined)
+  })
+
   it('a container agent without the workspace mount does not', async () => {
     const { opts } = optsWith()
     const registry = buildAcpRegistry(podmanCfg(['workspace']), opts)

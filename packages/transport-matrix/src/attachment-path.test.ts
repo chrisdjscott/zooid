@@ -1,4 +1,4 @@
-import { mkdirSync, mkdtempSync, symlinkSync, writeFileSync } from 'node:fs'
+import { mkdirSync, mkdtempSync, realpathSync, symlinkSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
 import { describe, expect, it } from 'vitest'
@@ -9,7 +9,7 @@ const tmp = () => mkdtempSync(join(tmpdir(), 'zooid-attach-'))
 describe('resolveAttachmentPath', () => {
   describe('local', () => {
     const dir = tmp()
-    const base = { hostDir: dir, agentPath: dir }
+    const base = { hostDir: dir, agentPath: dir, confined: false }
     it('resolves relative paths against the workdir', () => {
       expect(resolveAttachmentPath({ ...base, path: 'out/r.pdf' })).toBe(join(dir, 'out/r.pdf'))
     })
@@ -23,7 +23,7 @@ describe('resolveAttachmentPath', () => {
 
   describe('container', () => {
     const dir = tmp()
-    const base = { hostDir: dir, agentPath: '/workspace' }
+    const base = { hostDir: dir, agentPath: '/workspace', confined: true }
     const outside = (p: string) =>
       `${p} is outside /workspace; a container agent can only attach files under /workspace`
 
@@ -59,11 +59,24 @@ describe('resolveAttachmentPath', () => {
       symlinkSync(join(other, 'secret.txt'), join(dir, 'link'))
       expect(() => resolveAttachmentPath({ ...base, path: 'link' })).toThrow('outside /workspace')
     })
-    it('accepts a symlink that stays inside', () => {
+    it('returns the realpath of a symlink that stays inside', () => {
       mkdirSync(join(dir, 'sub'), { recursive: true })
       writeFileSync(join(dir, 'real.txt'), 'x')
       symlinkSync(join(dir, 'real.txt'), join(dir, 'sub', 'ok'))
-      expect(() => resolveAttachmentPath({ ...base, path: 'sub/ok' })).not.toThrow()
+      expect(resolveAttachmentPath({ ...base, path: 'sub/ok' })).toBe(
+        realpathSync(join(dir, 'real.txt')),
+      )
+    })
+    it('confines by flag even when hostDir equals agentPath', () => {
+      const same = tmp()
+      expect(() =>
+        resolveAttachmentPath({
+          path: '/etc/passwd',
+          hostDir: same,
+          agentPath: same,
+          confined: true,
+        }),
+      ).toThrow('outside')
     })
   })
 })

@@ -70,8 +70,11 @@ export interface MatrixContextProviderOpts {
   rooms?: RoomBinding[]
   /** Uploads as asUserId. Absent = sendAttachment throws attachment_failed. */
   media?: MediaClientLike
-  /** Host workdir and the prefix the agent sees it at. Absent = sendAttachment throws attachment_failed. */
-  workspace?: { hostDir: string; agentPath: string }
+  /**
+   * Host workdir, the prefix the agent sees it at, and whether the agent is
+   * confined to it (container runtimes). Absent = sendAttachment throws attachment_failed.
+   */
+  workspace?: { hostDir: string; agentPath: string; confined: boolean }
 }
 
 /** Events fetched per round when collecting recent threads. */
