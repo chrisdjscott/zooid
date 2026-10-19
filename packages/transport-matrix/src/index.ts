@@ -6,6 +6,8 @@ export type {
 } from './matrix-client.js'
 export { MatrixContextProvider } from './context-provider.js'
 export type { MatrixContextProviderOpts } from './context-provider.js'
+export { resolveAttachmentPath } from './attachment-path.js'
+export { mimeFromFilename } from './mime.js'
 export { renderRegistration } from './registration.js'
 export type { MatrixTransportConfig } from './registration.js'
 export {

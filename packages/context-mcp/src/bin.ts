@@ -13,6 +13,7 @@ import type {
 
 const spawnIdIdx = process.argv.indexOf('--spawn-id')
 const spawnId = spawnIdIdx >= 0 ? process.argv[spawnIdIdx + 1] : undefined
+const canSendAttachment = process.argv.includes('--send-attachment')
 const sockPath = process.env.ZOOID_DAEMON_SOCK
 if (!spawnId || !sockPath) {
   process.stderr.write('zooid-context-mcp: --spawn-id and ZOOID_DAEMON_SOCK are required\n')
@@ -55,6 +56,12 @@ const remoteProvider: TransportContextProvider = {
       method: 'getRoomInfo',
       params: {},
     }) as Promise<Awaited<ReturnType<TransportContextProvider['getRoomInfo']>>>,
+  sendAttachment: (_channelId, _threadId, input) =>
+    callDaemon(sockPath, {
+      spawnId,
+      method: 'sendAttachment',
+      params: input as unknown as Record<string, unknown>,
+    }) as Promise<Awaited<ReturnType<NonNullable<TransportContextProvider['sendAttachment']>>>>,
   getRooms: () =>
     callDaemon(sockPath, {
       spawnId,
@@ -119,6 +126,7 @@ const server = buildContextMcpServer({
   resolveTasks: async () => remoteTasks,
   role,
   roleError,
+  canSendAttachment,
 })
 await server.connect(new StdioServerTransport())
 process.stderr.write(`zooid-context-mcp: ready (spawnId=${spawnId})\n`)

@@ -19,7 +19,7 @@ import {
   type ZooidConfig,
   type TransportContextProvider,
 } from '@zooid/core'
-import { MatrixClient, MatrixContextProvider } from '@zooid/transport-matrix'
+import { MatrixClient, MatrixContextProvider, MediaClient } from '@zooid/transport-matrix'
 import {
   CONTEXT_CONTAINER_SOCK,
   SpawnRegistry,
@@ -115,6 +115,15 @@ interface ComposedMounts {
   cwd: string
 }
 
+/**
+ * Host path of an agent's workdir: absolute as-is, relative resolved against
+ * the config dir. Undefined when it is relative and there is no config dir.
+ */
+function hostWorkdir(agent: AgentConfig, opts: BuildAcpRegistryOptions): string | undefined {
+  if (isAbsolute(agent.workdir)) return agent.workdir
+  return opts.configDir ? pathResolve(opts.configDir, agent.workdir) : undefined
+}
+
 function composeAgentMounts(
   name: string,
   agent: AgentConfig,
@@ -136,18 +145,8 @@ function composeAgentMounts(
   // passes configDir; tests that exercise other concerns (image resolution,
   // env) can leave it off without the workspace mount intruding.
   if (!disabled.has('workspace')) {
-    let host = agent.workdir
-    if (isAbsolute(host)) {
-      composed.push({
-        id: 'workspace',
-        host,
-        target: CONTAINER_WORKDIR,
-        mode: 'rw',
-        create: true,
-      })
-      workspaceActive = true
-    } else if (opts.configDir) {
-      host = pathResolve(opts.configDir, host)
+    const host = hostWorkdir(agent, opts)
+    if (host) {
       composed.push({
         id: 'workspace',
         host,
@@ -365,6 +364,7 @@ function buildContextSpawns(
   const registry = opts.contextSpawnRegistry
 
   const matrixClients = new Map<string, MatrixClient>()
+  const mediaClients = new Map<string, MediaClient>()
   const agentBots = new Map<string, string>()
   for (const [name, agent] of Object.entries(cfg.agents)) {
     if (agent.matrix?.user_id) agentBots.set(agent.matrix.user_id, name)
@@ -375,6 +375,10 @@ function buildContextSpawns(
       tname,
       new MatrixClient({ homeserver: tcfg.homeserver, asToken: tcfg.as_token }),
     )
+    mediaClients.set(
+      tname,
+      new MediaClient({ homeserver: tcfg.homeserver, asToken: tcfg.as_token }),
+    )
   }
 
   const result: Record<string, ContextSpawnFactory | undefined> = {}
@@ -384,6 +388,17 @@ function buildContextSpawns(
     // No host socket reaches a vm guest; see contextUnavailableAgents.
     if (kind !== 'vm' && agent.matrix && matrixClients.has(agent.matrix.transport) && sockPath) {
       const client = matrixClients.get(agent.matrix.transport)!
+      // What the agent sees its workspace as ([[ZOD068]]). Absent = the agent
+      // has no workspace the daemon can map, so it gets no attach tool.
+      const hostDir = hostWorkdir(agent, opts)
+      const workspace =
+        hostDir === undefined
+          ? undefined
+          : kind === 'local'
+            ? { hostDir, agentPath: hostDir }
+            : (agent.container?.disable_mounts ?? []).includes('workspace')
+              ? undefined
+              : { hostDir, agentPath: CONTAINER_WORKDIR }
       const provider: TransportContextProvider = new MatrixContextProvider({
         client,
         asUserId: agent.matrix.user_id,
@@ -391,6 +406,8 @@ function buildContextSpawns(
         // Same array BotPool.bootstrap rewrites `.alias` on in place — reads
         // through this after bootstrap see canonical room IDs.
         rooms: agent.matrix.rooms,
+        media: mediaClients.get(agent.matrix.transport),
+        workspace,
       })
       result[name] = async (threadId: string, channelId?: string, sessionKey?: string) => {
         const spawnId = registry.register({
@@ -403,6 +420,7 @@ function buildContextSpawns(
           spawnId,
           sockPath,
           containerize: isContainerRuntime(kind),
+          sendAttachment: workspace !== undefined,
         })
       }
     } else {

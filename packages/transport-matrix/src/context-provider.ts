@@ -6,11 +6,20 @@ import type {
   RoomInfo,
   SendMessageInput,
   SendMessageResult,
+  SendAttachmentInput,
+  SendAttachmentResult,
   Message,
   ThreadOverview,
   ThreadOverviewPage,
 } from '@zooid/core'
+import { readFile, stat } from 'node:fs/promises'
+import { basename } from 'node:path'
 import type { MatrixClient } from './matrix-client.js'
+import type { MediaClientLike } from './transport.js'
+import { INLINE_IMAGE_MIMES, MAX_DOWNLOAD_BYTES, MAX_INLINE_IMAGE_BYTES } from './media-client.js'
+import { resolveAttachmentPath } from './attachment-path.js'
+import { mimeFromFilename } from './mime.js'
+import { toErrorBody } from './event-encoders.js'
 import type { RoomBinding } from '@zooid/core'
 
 interface MatrixMessageEvent {
@@ -59,6 +68,10 @@ export interface MatrixContextProviderOpts {
    * don't exercise either method).
    */
   rooms?: RoomBinding[]
+  /** Uploads as asUserId. Absent = sendAttachment throws attachment_failed. */
+  media?: MediaClientLike
+  /** Host workdir and the prefix the agent sees it at. Absent = sendAttachment throws attachment_failed. */
+  workspace?: { hostDir: string; agentPath: string }
 }
 
 /** Events fetched per round when collecting recent threads. */
@@ -368,6 +381,119 @@ export class MatrixContextProvider implements TransportContextProvider {
     })
     return { event_id, ...(input.thread_id ? { thread_id: input.thread_id } : {}) }
   }
+
+  async sendAttachment(
+    channelId: string,
+    threadId: string,
+    input: SendAttachmentInput,
+  ): Promise<SendAttachmentResult> {
+    const { client, asUserId, media, workspace } = this.opts
+    let mediaEventId: string | undefined
+    try {
+      if (!media) throw new Error('this agent has no media client')
+      if (!workspace) throw new Error('this agent has no workspace to attach from')
+
+      const hostPath = resolveAttachmentPath({ path: input.path, ...workspace })
+      let info
+      try {
+        info = await stat(hostPath)
+      } catch (err) {
+        throw new Error(`cannot read ${input.path}: ${errMessage(err)}`)
+      }
+      if (!info.isFile()) throw new Error(`not a file: ${input.path}`)
+      if (info.size > MAX_DOWNLOAD_BYTES) {
+        throw new Error(`file too large: ${info.size} > ${MAX_DOWNLOAD_BYTES}`)
+      }
+      let data: Buffer
+      try {
+        data = await readFile(hostPath)
+      } catch (err) {
+        throw new Error(`cannot read ${input.path}: ${errMessage(err)}`)
+      }
+
+      const name = input.name || basename(input.path)
+      let mimetype = mimeFromFilename(name)
+      if (mimetype === 'application/octet-stream') mimetype = mimeFromFilename(input.path)
+      const { content_uri } = await media.upload({
+        data,
+        contentType: mimetype,
+        filename: name,
+        asUserId,
+      })
+      const msgtype =
+        INLINE_IMAGE_MIMES.includes(mimetype) && data.length <= MAX_INLINE_IMAGE_BYTES
+          ? 'm.image'
+          : 'm.file'
+      const sent = await client.sendMessage({
+        roomId: channelId,
+        asUserId,
+        threadRoot: threadId,
+        content: {
+          msgtype,
+          body: name,
+          filename: name,
+          url: content_uri,
+          info: { mimetype, size: data.length },
+        },
+      })
+      mediaEventId = sent.event_id
+
+      const caption = input.caption?.trim()
+      if (caption) {
+        try {
+          await client.sendMessage({
+            roomId: channelId,
+            asUserId,
+            threadRoot: threadId,
+            content: { msgtype: 'm.notice', body: input.caption as string },
+          })
+        } catch (err) {
+          throw new Error(
+            `caption failed after attachment ${mediaEventId} was sent: ${errMessage(err)}`,
+          )
+        }
+      }
+      return { event_id: mediaEventId, mxc_uri: content_uri }
+    } catch (err) {
+      const reason = errMessage(err)
+      await this.reportAttachmentError(channelId, threadId, reason)
+      throw new Error(`attachment_failed: ${reason}`)
+    }
+  }
+
+  /** Same shape as the transport's sendMediaError: visible in the thread, never throws. */
+  private async reportAttachmentError(
+    channelId: string,
+    threadId: string,
+    reason: string,
+  ): Promise<void> {
+    const { client, asUserId, agentBots } = this.opts
+    try {
+      await client.sendCustomEvent({
+        roomId: channelId,
+        asUserId,
+        eventType: 'dev.zooid.error',
+        content: toErrorBody(
+          {
+            kind: 'error' as const,
+            agentId: agentBots.get(asUserId) ?? asUserId,
+            sessionId: null,
+            turnId: null,
+            code: 'attachment_failed',
+            message: reason,
+            transient: false,
+          },
+          threadId,
+        ),
+      })
+    } catch (e) {
+      console.warn(`[matrix:${asUserId}] dev.zooid.error send failed:`, e)
+    }
+  }
+}
+
+function errMessage(err: unknown): string {
+  return err instanceof Error ? err.message : String(err)
 }
 
 /**

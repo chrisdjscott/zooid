@@ -323,6 +323,57 @@ describe('daemon-socket', () => {
     ])
   })
 
+  describe('sendAttachment', () => {
+    const start = async (provider: TransportContextProvider, agentName = 'a') => {
+      const registry = new SpawnRegistry()
+      const spawnId = registry.register({
+        agentName: 'a',
+        threadRef: { channelId: '!r:hs', threadId: '$root' },
+        provider,
+      })
+      const sockPath = join(tmpdir(), `zooid-test-${randomUUID()}.sock`)
+      const server = await startDaemonSocketServer({ sockPath, registry, agentName })
+      cleanup.push(() => server.close())
+      return { spawnId, sockPath }
+    }
+
+    it('routes with the binding scope and ignores room / thread_id params', async () => {
+      const calls: unknown[][] = []
+      const { spawnId, sockPath } = await start(
+        fakeProvider({
+          sendAttachment: async (...args) => {
+            calls.push(args)
+            return { event_id: '$m', mxc_uri: 'mxc://hs/a' }
+          },
+        }),
+      )
+      const res = await callDaemon(sockPath, {
+        spawnId,
+        method: 'sendAttachment',
+        params: { path: 'a.png', room: '!other:hs', thread_id: '$x' },
+      })
+      expect(calls).toEqual([['!r:hs', '$root', { path: 'a.png' }]])
+      expect(res).toEqual({ event_id: '$m', mxc_uri: 'mxc://hs/a' })
+    })
+
+    it('refuses when the provider cannot send attachments', async () => {
+      const { spawnId, sockPath } = await start(fakeProvider())
+      await expect(
+        callDaemon(sockPath, { spawnId, method: 'sendAttachment', params: { path: 'a.png' } }),
+      ).rejects.toThrow('attachment_unsupported: this transport cannot send attachments')
+    })
+
+    it('refuses another agent’s binding', async () => {
+      const { spawnId, sockPath } = await start(
+        fakeProvider({ sendAttachment: async () => ({ event_id: '$m', mxc_uri: 'x' }) }),
+        'bob',
+      )
+      await expect(
+        callDaemon(sockPath, { spawnId, method: 'sendAttachment', params: { path: 'a.png' } }),
+      ).rejects.toThrow('binding not owned by caller')
+    })
+  })
+
   it('refuses sendMessage into a room the caller is not bound to', async () => {
     const provider = fakeProvider({
       sendMessage: async () => {

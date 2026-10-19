@@ -56,6 +56,8 @@ export type {
   Member,
   RoomInfo,
   SendMessageInput,
+  SendAttachmentInput,
+  SendAttachmentResult,
   SendMessageResult,
   ThreadOverview,
   ThreadOverviewPage,

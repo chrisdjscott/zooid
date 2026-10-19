@@ -111,3 +111,51 @@ describe('buildAcpRegistry — context provider in a container runtime', () => {
     expect(spec.command).toBe(process.execPath)
   })
 })
+
+describe('buildAcpRegistry — zooid_send_attachment wiring [ZOD068]', () => {
+  function optsWith(register = vi.fn((_input: unknown) => 'spawn-1')) {
+    return {
+      register,
+      opts: {
+        approvals: { register: vi.fn(), on: vi.fn() } as never,
+        contextSpawnRegistry: { register } as never,
+        daemonSockPaths: { architect: '/home/ubuntu/hq/data/run/context.sock' },
+        daemonHome: '/home/ubuntu',
+      },
+    }
+  }
+  function podmanCfg(disableMounts?: string[]): ZooidConfig {
+    const cfg = structuredClone(matrixCfg)
+    cfg.runtime = 'podman'
+    ;(cfg.agents.architect as { container?: unknown }).container = {
+      image: 'img:latest',
+      ...(disableMounts ? { disable_mounts: disableMounts } : {}),
+    }
+    return cfg
+  }
+
+  it('a local agent gets the flag and a provider that can attach', async () => {
+    const { register, opts } = optsWith()
+    const registry = buildAcpRegistry(matrixCfg, opts)
+    const spec = await registry.opts.contextSpawns!.architect!('!r:hs')
+    expect(spec.args).toContain('--send-attachment')
+    const input = register.mock.calls[0]![0] as {
+      provider: { sendAttachment?: unknown }
+    }
+    expect(typeof input.provider.sendAttachment).toBe('function')
+  })
+
+  it('a container agent with the workspace mount gets the flag', async () => {
+    const { opts } = optsWith()
+    const registry = buildAcpRegistry(podmanCfg(), opts)
+    const spec = await registry.opts.contextSpawns!.architect!('!r:hs')
+    expect(spec.args).toContain('--send-attachment')
+  })
+
+  it('a container agent without the workspace mount does not', async () => {
+    const { opts } = optsWith()
+    const registry = buildAcpRegistry(podmanCfg(['workspace']), opts)
+    const spec = await registry.opts.contextSpawns!.architect!('!r:hs')
+    expect(spec.args).not.toContain('--send-attachment')
+  })
+})

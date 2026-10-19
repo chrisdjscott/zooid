@@ -45,6 +45,21 @@ export interface SendMessageResult {
   thread_id?: string
 }
 
+export interface SendAttachmentInput {
+  /** As the agent sees it. Relative paths resolve against the agent's workspace. */
+  path: string
+  /** Display filename. Default: basename of `path`. */
+  name?: string
+  /** Sent as a threaded m.notice right after the media event. Empty/absent = none. */
+  caption?: string
+}
+
+export interface SendAttachmentResult {
+  /** The media event, not the caption. */
+  event_id: string
+  mxc_uri: string
+}
+
 export interface HistoryPage {
   messages: Message[]
   next_before?: string
@@ -112,4 +127,13 @@ export interface TransportContextProvider {
    */
   resolveRoom?(selector: string): string | undefined
   sendMessage(input: SendMessageInput): Promise<SendMessageResult>
+  /**
+   * Post a file to the given thread as the agent. Optional: absent = the
+   * transport cannot send attachments ([[ZOD068]]).
+   */
+  sendAttachment?(
+    channelId: string,
+    threadId: string,
+    input: SendAttachmentInput,
+  ): Promise<SendAttachmentResult>
 }
