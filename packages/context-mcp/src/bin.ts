@@ -35,11 +35,13 @@ const remoteProvider: TransportContextProvider = {
       method: 'getRecentThreads',
       params: (opts ?? {}) as Record<string, unknown>,
     }) as Promise<Awaited<ReturnType<TransportContextProvider['getRecentThreads']>>>,
-  getThreadHistory: (_channelId, threadId, opts) =>
+  // An empty channel means the ambient room; anything else is the agent's
+  // explicit `room` selector, which the daemon resolves and checks.
+  getThreadHistory: (channelId, threadId, opts) =>
     callDaemon(sockPath, {
       spawnId,
       method: 'getThreadHistory',
-      params: { ...(opts ?? {}), threadId } as Record<string, unknown>,
+      params: { ...(opts ?? {}), threadId, ...(channelId ? { room: channelId } : {}) } as Record<string, unknown>,
     }) as Promise<Awaited<ReturnType<TransportContextProvider['getThreadHistory']>>>,
   getChannelMembers: () =>
     callDaemon(sockPath, {

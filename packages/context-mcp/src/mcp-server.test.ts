@@ -313,6 +313,38 @@ describe('buildContextMcpServer', () => {
     })
   })
 
+  it('zooid_get_thread_history passes room through as the target room, and the ambient room when omitted', async () => {
+    const targets: string[] = []
+    const provider = makeProvider({
+      getThreadHistory: async (channelId) => {
+        targets.push(channelId)
+        return { messages: [], has_more: false }
+      },
+    })
+    const client = await connect(buildContextMcpServer({ resolve: async () => provider }))
+    await client.callTool({
+      name: 'zooid_get_thread_history',
+      arguments: { room: '!other:localhost', thread_id: '$root' },
+    })
+    await client.callTool({ name: 'zooid_get_thread_history', arguments: { thread_id: '$root' } })
+    expect(targets).toEqual(['!other:localhost', ''])
+  })
+
+  it('zooid_get_thread_history surfaces not_in_room from the provider as a tool error', async () => {
+    const provider = makeProvider({
+      getThreadHistory: async () => {
+        throw new Error('not_in_room: this agent is not a member of !elsewhere:localhost')
+      },
+    })
+    const client = await connect(buildContextMcpServer({ resolve: async () => provider }))
+    const res = await client.callTool({
+      name: 'zooid_get_thread_history',
+      arguments: { room: '!elsewhere:localhost', thread_id: '$root' },
+    })
+    expect(res.isError).toBe(true)
+    expect(JSON.stringify(res.content)).toContain('not_in_room')
+  })
+
   it('zooid_get_thread_history surfaces a validation error when thread_id is missing', async () => {
     const server = buildContextMcpServer({
       resolve: async () => makeProvider(),
