@@ -4,6 +4,7 @@ import type { TaskActions, TaskCallerRef, TaskRole, TransportContextProvider } f
 import {
   AGENT_NOTIFY_INSTRUCTIONS,
   HANDOFF_DESCRIPTION,
+  SEND_ATTACHMENT_DESCRIPTION,
   SEND_MESSAGE_DESCRIPTION,
 } from './tool-text.js'
 
@@ -32,6 +33,11 @@ export interface BuildContextMcpServerOpts {
    * unreachable" is distinguishable from "tool missing".
    */
   roleError?: string
+  /**
+   * Register `zooid_send_attachment`. Set by the spawn (`--send-attachment`)
+   * when the bound provider can send attachments ([[ZOD068]]).
+   */
+  canSendAttachment?: boolean
 }
 // The socket substitutes its authenticated spawn binding; models never supply an address.
 const CALLER_FROM_BINDING: TaskCallerRef = {
@@ -214,6 +220,27 @@ export function buildContextMcpServer(opts: BuildContextMcpServerOpts): McpServe
       return { content: [{ type: 'text', text: JSON.stringify(result) }] }
     },
   )
+
+  if (opts.canSendAttachment) {
+    server.tool(
+      'zooid_send_attachment',
+      SEND_ATTACHMENT_DESCRIPTION,
+      {
+        path: z.string().min(1),
+        name: z.string().optional(),
+        caption: z.string().optional(),
+      },
+      async ({ path, name, caption }) => {
+        const provider = await opts.resolve()
+        if (!provider.sendAttachment) {
+          throw new Error('attachment_unsupported: this transport cannot send attachments')
+        }
+        // The socket fills room and thread from the spawn binding.
+        const result = await provider.sendAttachment('', '', { path, name, caption })
+        return { content: [{ type: 'text', text: JSON.stringify(result) }] }
+      },
+    )
+  }
 
   return server
 }

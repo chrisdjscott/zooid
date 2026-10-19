@@ -2,6 +2,7 @@ import { describe, it, expect } from 'vitest'
 import { Client } from '@modelcontextprotocol/sdk/client/index.js'
 import { InMemoryTransport } from '@modelcontextprotocol/sdk/inMemory.js'
 import { buildContextMcpServer } from './mcp-server.js'
+import { SEND_ATTACHMENT_DESCRIPTION } from './tool-text.js'
 import type { TaskActions, TransportContextProvider } from '@zooid/core'
 
 function makeProvider(over: Partial<TransportContextProvider> = {}): TransportContextProvider {
@@ -163,6 +164,89 @@ describe('buildContextMcpServer', () => {
       arguments: { room: '!a:localhost', thread_id: '$t', text: 'noted' },
     })
     expect(sent).toEqual([{ room: '!a:localhost', thread_id: '$t', text: 'noted' }])
+  })
+
+  describe('zooid_send_attachment', () => {
+    const stub = async () => ({ event_id: '$m', mxc_uri: 'mxc://hs/a' })
+
+    it('is registered with the flag', async () => {
+      const server = buildContextMcpServer({
+        resolve: async () => makeProvider({ sendAttachment: stub }),
+        canSendAttachment: true,
+      })
+      const client = await connect(server)
+      const tool = (await client.listTools()).tools.find((t) => t.name === 'zooid_send_attachment')
+      expect(tool?.description).toBe(SEND_ATTACHMENT_DESCRIPTION)
+    })
+
+    it('is absent without the flag', async () => {
+      const server = buildContextMcpServer({
+        resolve: async () => makeProvider({ sendAttachment: stub }),
+      })
+      const client = await connect(server)
+      expect((await client.listTools()).tools.map((t) => t.name)).not.toContain(
+        'zooid_send_attachment',
+      )
+    })
+
+    it('forwards input with an empty scope and returns the result as JSON text', async () => {
+      const calls: unknown[][] = []
+      const server = buildContextMcpServer({
+        resolve: async () =>
+          makeProvider({
+            sendAttachment: async (...args) => {
+              calls.push(args)
+              return stub()
+            },
+          }),
+        canSendAttachment: true,
+      })
+      const client = await connect(server)
+      const res = await client.callTool({
+        name: 'zooid_send_attachment',
+        arguments: { path: 'a.png', name: 'A.png', caption: 'hi' },
+      })
+      expect(calls).toEqual([['', '', { path: 'a.png', name: 'A.png', caption: 'hi' }]])
+      expect((res.content as Array<{ text: string }>)[0].text).toBe(
+        '{"event_id":"$m","mxc_uri":"mxc://hs/a"}',
+      )
+    })
+
+    it('surfaces a failure as an isError result', async () => {
+      const server = buildContextMcpServer({
+        resolve: async () =>
+          makeProvider({
+            sendAttachment: async () => {
+              throw new Error('attachment_failed: cannot read a.png: ENOENT')
+            },
+          }),
+        canSendAttachment: true,
+      })
+      const client = await connect(server)
+      const res = await client.callTool({ name: 'zooid_send_attachment', arguments: { path: 'a.png' } })
+      expect(res.isError).toBe(true)
+      expect((res.content as Array<{ text: string }>)[0].text).toContain(
+        'attachment_failed: cannot read a.png: ENOENT',
+      )
+    })
+
+    it('rejects an empty path without calling the provider', async () => {
+      let called = false
+      const server = buildContextMcpServer({
+        resolve: async () =>
+          makeProvider({
+            sendAttachment: async () => {
+              called = true
+              return stub()
+            },
+          }),
+        canSendAttachment: true,
+      })
+      const client = await connect(server)
+      const res = await client.callTool({ name: 'zooid_send_attachment', arguments: { path: '' } })
+      expect(res.isError).toBe(true)
+      expect(called).toBe(false)
+    })
   })
 
   it('zooid_get_rooms returns the provider payload', async () => {

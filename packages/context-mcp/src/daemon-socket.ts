@@ -1,7 +1,7 @@
 import { createServer, createConnection, type Server, type Socket } from 'node:net'
 import { unlink } from 'node:fs/promises'
 import type { SpawnRegistry } from './spawn-registry.js'
-import type { CompleteTaskInput, StartTasksInput, HandoffInput } from '@zooid/core'
+import type { CompleteTaskInput, StartTasksInput, HandoffInput, SendAttachmentInput } from '@zooid/core'
 import { agentSocketPath } from './socket-paths.js'
 
 export interface DaemonRequest {
@@ -15,6 +15,7 @@ export interface DaemonRequest {
     | 'getRoomInfo'
     | 'getRooms'
     | 'sendMessage'
+    | 'sendAttachment'
     | 'startTasks'
     | 'completeTask'
     | 'describeRole'
@@ -190,6 +191,23 @@ async function handleLine(
       result = await binding.provider.sendMessage(
         req.params as unknown as Parameters<typeof binding.provider.sendMessage>[0],
       )
+    } else if (req.method === 'sendAttachment') {
+      if (!binding.provider.sendAttachment) {
+        socket.write(
+          JSON.stringify({
+            ok: false,
+            error: 'attachment_unsupported: this transport cannot send attachments',
+          } satisfies DaemonError) + '\n',
+        )
+        return
+      }
+      // Scope comes from the binding; a room / thread_id in params is ignored.
+      const { path, name, caption } = req.params as unknown as SendAttachmentInput
+      result = await binding.provider.sendAttachment(channelId, binding.threadRef.threadId, {
+        path,
+        name,
+        caption,
+      })
     } else if (
       req.method === 'startTasks' ||
       req.method === 'completeTask' ||

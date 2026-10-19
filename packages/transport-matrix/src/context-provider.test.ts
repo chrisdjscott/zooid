@@ -1,4 +1,8 @@
+import { mkdtempSync, truncateSync, writeFileSync } from 'node:fs'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
 import { describe, it, expect, vi } from 'vitest'
+import { MAX_DOWNLOAD_BYTES, MAX_INLINE_IMAGE_BYTES } from './media-client.js'
 import { BotPool } from './bot-pool.js'
 import { MatrixContextProvider } from './context-provider.js'
 import type { MatrixClient } from './matrix-client.js'
@@ -889,5 +893,207 @@ describe('MatrixContextProvider — reads are impersonated as the agent', () => 
     } as unknown as Partial<MatrixClient>)
 
     await expect(p.getThreadHistory('!private:hs', '$x', { limit: 10 })).rejects.toThrow('403')
+  })
+})
+
+describe('sendAttachment', () => {
+  function setup(opts: { agentPath?: string; omit?: 'media' | 'workspace'; client?: object } = {}) {
+    const dir = mkdtempSync(join(tmpdir(), 'zooid-send-att-'))
+    const sendMessage = vi
+      .fn()
+      .mockResolvedValueOnce({ event_id: '$m' })
+      .mockResolvedValue({ event_id: '$c' })
+    const sendCustomEvent = vi.fn().mockResolvedValue({ event_id: '$err' })
+    const upload = vi.fn().mockResolvedValue({ content_uri: 'mxc://hs/abc' })
+    const client = fakeClient({
+      sendMessage,
+      sendCustomEvent,
+      ...opts.client,
+    } as unknown as Partial<MatrixClient>)
+    const provider = new MatrixContextProvider({
+      client,
+      asUserId: '@architect:hs',
+      agentBots: new Map([['@architect:hs', 'architect']]),
+      ...(opts.omit === 'media' ? {} : { media: { upload, download: vi.fn() } }),
+      ...(opts.omit === 'workspace'
+        ? {}
+        : { workspace: {
+            hostDir: dir,
+            agentPath: opts.agentPath ?? dir,
+            confined: opts.agentPath !== undefined,
+          } }),
+    })
+    return { dir, provider, sendMessage, sendCustomEvent, upload }
+  }
+  const send = (
+    p: MatrixContextProvider,
+    input: { path: string; name?: string; caption?: string },
+  ) => p.sendAttachment!('!r:hs', '$root', input)
+
+  function expectErrorEvent(sendCustomEvent: ReturnType<typeof vi.fn>) {
+    expect(sendCustomEvent).toHaveBeenCalledTimes(1)
+    const arg = sendCustomEvent.mock.calls[0][0]
+    expect(arg).toMatchObject({
+      roomId: '!r:hs',
+      asUserId: '@architect:hs',
+      eventType: 'dev.zooid.error',
+      content: {
+        code: 'attachment_failed',
+        'm.relates_to': { rel_type: 'm.thread', event_id: '$root' },
+      },
+    })
+  }
+
+  it('sends a small png as a threaded m.image', async () => {
+    const { dir, provider, sendMessage, upload } = setup()
+    const bytes = Buffer.alloc(100, 7)
+    writeFileSync(join(dir, 'shot.png'), bytes)
+    const result = await send(provider, { path: 'shot.png' })
+    expect(upload).toHaveBeenCalledWith({
+      data: bytes,
+      contentType: 'image/png',
+      filename: 'shot.png',
+      asUserId: '@architect:hs',
+    })
+    expect(sendMessage).toHaveBeenCalledWith({
+      roomId: '!r:hs',
+      asUserId: '@architect:hs',
+      threadRoot: '$root',
+      content: {
+        msgtype: 'm.image',
+        body: 'shot.png',
+        filename: 'shot.png',
+        url: 'mxc://hs/abc',
+        info: { mimetype: 'image/png', size: 100 },
+      },
+    })
+    expect(result).toEqual({ event_id: '$m', mxc_uri: 'mxc://hs/abc' })
+  })
+
+  it('sends an oversized png as m.file', async () => {
+    const { dir, provider, sendMessage } = setup()
+    writeFileSync(join(dir, 'big.png'), Buffer.alloc(MAX_INLINE_IMAGE_BYTES + 1))
+    await send(provider, { path: 'big.png' })
+    const content = sendMessage.mock.calls[0][0].content
+    expect(content.msgtype).toBe('m.file')
+    expect(content.info.mimetype).toBe('image/png')
+  })
+
+  it.each([
+    ['r.pdf', 'application/pdf'],
+    ['data.bin', 'application/octet-stream'],
+  ])('sends %s as m.file with %s', async (file, mimetype) => {
+    const { dir, provider, sendMessage } = setup()
+    writeFileSync(join(dir, file), 'x')
+    await send(provider, { path: file })
+    const content = sendMessage.mock.calls[0][0].content
+    expect(content.msgtype).toBe('m.file')
+    expect(content.info.mimetype).toBe(mimetype)
+  })
+
+  it('lets name override the filename and mimetype', async () => {
+    const { dir, provider, sendMessage } = setup()
+    writeFileSync(join(dir, 'tmp123'), 'a,b')
+    await send(provider, { path: 'tmp123', name: 'report.csv' })
+    const content = sendMessage.mock.calls[0][0].content
+    expect(content).toMatchObject({
+      body: 'report.csv',
+      filename: 'report.csv',
+      info: { mimetype: 'text/csv' },
+    })
+  })
+
+  it('posts the caption as a threaded notice after the media event', async () => {
+    const { dir, provider, sendMessage } = setup()
+    writeFileSync(join(dir, 'shot.png'), 'x')
+    const result = await send(provider, { path: 'shot.png', caption: 'before/after' })
+    expect(sendMessage).toHaveBeenCalledTimes(2)
+    expect(sendMessage.mock.calls[1][0]).toEqual({
+      roomId: '!r:hs',
+      asUserId: '@architect:hs',
+      threadRoot: '$root',
+      content: { msgtype: 'm.notice', body: 'before/after' },
+    })
+    expect(result.event_id).toBe('$m')
+  })
+
+  it('skips a blank caption', async () => {
+    const { dir, provider, sendMessage } = setup()
+    writeFileSync(join(dir, 'shot.png'), 'x')
+    await send(provider, { path: 'shot.png', caption: '   ' })
+    expect(sendMessage).toHaveBeenCalledTimes(1)
+  })
+
+  it('reports a missing file in the thread and rejects', async () => {
+    const { provider, upload, sendCustomEvent } = setup()
+    await expect(send(provider, { path: 'nope.png' })).rejects.toThrow(
+      /^attachment_failed: cannot read nope\.png/,
+    )
+    expect(upload).not.toHaveBeenCalled()
+    expectErrorEvent(sendCustomEvent)
+  })
+
+  it('rejects a directory', async () => {
+    const { provider, sendCustomEvent } = setup()
+    await expect(send(provider, { path: '.' })).rejects.toThrow('attachment_failed: not a file: .')
+    expectErrorEvent(sendCustomEvent)
+  })
+
+  it('rejects a file over the download cap without uploading', async () => {
+    const { dir, provider, upload } = setup()
+    const f = join(dir, 'huge.bin')
+    writeFileSync(f, '')
+    truncateSync(f, MAX_DOWNLOAD_BYTES + 1)
+    await expect(send(provider, { path: 'huge.bin' })).rejects.toThrow(
+      'attachment_failed: file too large: 33554433 > 33554432',
+    )
+    expect(upload).not.toHaveBeenCalled()
+  })
+
+  it('refuses a container path outside the workspace', async () => {
+    const { provider, upload, sendCustomEvent } = setup({ agentPath: '/workspace' })
+    await expect(send(provider, { path: '/etc/passwd' })).rejects.toThrow(
+      /attachment_failed: \/etc\/passwd is outside \/workspace/,
+    )
+    expect(upload).not.toHaveBeenCalled()
+    expectErrorEvent(sendCustomEvent)
+  })
+
+  it('surfaces an upload failure and sends no media event', async () => {
+    const { dir, provider, upload, sendMessage, sendCustomEvent } = setup()
+    writeFileSync(join(dir, 'a.png'), 'x')
+    upload.mockRejectedValue(new Error('media upload failed: 413'))
+    await expect(send(provider, { path: 'a.png' })).rejects.toThrow(
+      'attachment_failed: media upload failed: 413',
+    )
+    expect(sendMessage).not.toHaveBeenCalled()
+    expectErrorEvent(sendCustomEvent)
+  })
+
+  it('names the sent attachment when the caption fails', async () => {
+    const { dir, provider, sendMessage, sendCustomEvent } = setup()
+    writeFileSync(join(dir, 'a.png'), 'x')
+    sendMessage.mockReset()
+    sendMessage.mockResolvedValueOnce({ event_id: '$m' }).mockRejectedValueOnce(new Error('boom'))
+    await expect(send(provider, { path: 'a.png', caption: 'hi' })).rejects.toThrow(
+      'attachment_failed: caption failed after attachment $m was sent: boom',
+    )
+    expectErrorEvent(sendCustomEvent)
+  })
+
+  it('still rejects with the attachment error when the error event fails too', async () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    const { provider, sendCustomEvent } = setup()
+    sendCustomEvent.mockRejectedValue(new Error('event down'))
+    await expect(send(provider, { path: 'nope.png' })).rejects.toThrow(
+      /^attachment_failed: cannot read/,
+    )
+    expect(warn).toHaveBeenCalled()
+    warn.mockRestore()
+  })
+
+  it.each(['media', 'workspace'] as const)('fails cleanly without %s', async (omit) => {
+    const { provider } = setup({ omit })
+    await expect(send(provider, { path: 'a.png' })).rejects.toThrow(/^attachment_failed: /)
   })
 })
