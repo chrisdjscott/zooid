@@ -33,6 +33,7 @@ export type { TypingRegistry, TypingWire, TypingAgent } from './typing-registry.
 export { SyncLoop } from './sync-loop.js'
 export type { SyncLoopOptions, SyncResponse, SyncClient } from './sync-loop.js'
 export {
+  ensureAdminsInvited,
   ensureDefaultChannel,
   ensureWorkforceSpace,
   serverNameFromMxid,

@@ -23,6 +23,7 @@ import {
   MatrixClient,
   MediaClient,
   createMatrixTransport,
+  ensureAdminsInvited,
   ensureDefaultChannel,
   ensureWorkforceSpace,
   startWorkforcePublisher,
@@ -367,7 +368,10 @@ export async function startDaemon(opts: StartDaemonOpts = {}): Promise<DaemonHan
       port = 0
     }
     const spaceLocalpart = matrix.transport.space ?? 'dev'
-    const adminUserIds = opts.adminUserId ? [opts.adminUserId] : []
+    // `admins:` from zooid.yaml plus `--admin-user` (set by `zooid dev`).
+    const adminUserIds = [
+      ...new Set([...(matrix.transport.admins ?? []), ...(opts.adminUserId ? [opts.adminUserId] : [])]),
+    ]
     try {
       spaceRoomId = await ensureWorkforceSpace({
         client,
@@ -432,6 +436,7 @@ export async function startDaemon(opts: StartDaemonOpts = {}): Promise<DaemonHan
     }
 
     if (spaceRoomId) {
+      let defaultChannelId: string | undefined
       try {
         const generalRoomId = await ensureDefaultChannel({
           client,
@@ -441,9 +446,23 @@ export async function startDaemon(opts: StartDaemonOpts = {}): Promise<DaemonHan
           admins: adminUserIds,
         })
         console.log(`[matrix] ensured default channel #general:${serverName} → ${generalRoomId}`)
+        defaultChannelId = generalRoomId
       } catch (err) {
         console.warn('[matrix] default channel provisioning failed:', err)
       }
+      // Rooms created by an earlier start never got today's admins, so invite
+      // them on every start rather than only at creation.
+      await ensureAdminsInvited({
+        client,
+        asUserId,
+        admins: adminUserIds,
+        roomIds: [
+          spaceRoomId,
+          ...(defaultChannelId ? [defaultChannelId] : []),
+          // bootstrap rewrote each resolved binding's alias to its room ID.
+          ...bindings.flatMap((b) => b.rooms.map((r) => r.alias)).filter((a) => a.startsWith('!')),
+        ],
+      })
       try {
         const publisher: PublisherHandle = await startWorkforcePublisher({
           client,

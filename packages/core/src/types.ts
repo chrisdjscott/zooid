@@ -278,6 +278,12 @@ export interface MatrixTransportConfig {
    * @default 'dev'
    */
   space?: string
+  /**
+   * Human operators (full MXIDs, e.g. `@alice:example.org`) invited to the
+   * workforce space, every agent room and `#general` on every start. Merged
+   * with `--admin-user`. Invite-only: dropping an entry does not remove them.
+   */
+  admins?: string[]
 }
 
 /**

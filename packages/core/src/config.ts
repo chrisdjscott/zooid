@@ -606,6 +606,22 @@ function parseTransport(
       }
       out.space = r.space
     }
+
+    if (r.admins !== undefined) {
+      if (!Array.isArray(r.admins)) {
+        throw new Error(
+          `transports.${name}.admins must be an array of Matrix user IDs (got ${JSON.stringify(r.admins)})`,
+        )
+      }
+      r.admins.forEach((a, i) => {
+        if (typeof a !== 'string' || !MATRIX_USER_ID_RE.test(a)) {
+          throw new Error(
+            `transports.${name}.admins[${i}] must look like @localpart:server (got ${JSON.stringify(a)})`,
+          )
+        }
+      })
+      out.admins = [...new Set(r.admins as string[])]
+    }
     return out
   }
   // type: 'http'
@@ -741,7 +757,17 @@ function parseTransportBinding(
     }
     const rooms: RoomBinding[] = []
     for (let i = 0; i < block.rooms.length; i++) {
-      rooms.push(parseRoomBinding(`agents.${name}.matrix.rooms[${i}]`, block.rooms[i], serverName))
+      const binding = parseRoomBinding(`agents.${name}.matrix.rooms[${i}]`, block.rooms[i], serverName)
+      // An alias equal to the space's resolves to the space itself, so the
+      // agent would be bound to the space instead of a chat room.
+      const spaceLocalpart = refTransport.space ?? 'dev'
+      if (binding.alias === `#${spaceLocalpart}:${serverName}`) {
+        throw new Error(
+          `agents.${name}.matrix.rooms[${i}]: "#${spaceLocalpart}" collides with the workforce space alias ` +
+            `(transports.${refName}.space = "${spaceLocalpart}"); rename the room or set transports.${refName}.space`,
+        )
+      }
+      rooms.push(binding)
     }
 
     let displayName: string | undefined
