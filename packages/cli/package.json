@@ -34,7 +34,7 @@
     "build": "tsup",
     "test": "vitest run",
     "test:watch": "vitest",
-    "test:infra": "node ../../scripts/test-tier.mjs --no-file-parallelism tests/typing-lease.integration.test.ts",
+    "test:infra": "node ../../scripts/test-tier.mjs --no-file-parallelism tests/typing-lease.integration.test.ts tests/admin-invites.integration.test.ts",
     "typecheck": "tsc --noEmit",
     "release": "release-it"
   },
