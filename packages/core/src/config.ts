@@ -761,7 +761,7 @@ function parseTransportBinding(
       // An alias equal to the space's resolves to the space itself, so the
       // agent would be bound to the space instead of a chat room.
       const spaceLocalpart = refTransport.space ?? 'dev'
-      if (binding.alias.startsWith('#') && binding.alias.slice(1).split(':')[0] === spaceLocalpart) {
+      if (binding.alias === `#${spaceLocalpart}:${serverName}`) {
         throw new Error(
           `agents.${name}.matrix.rooms[${i}]: "#${spaceLocalpart}" collides with the workforce space alias ` +
             `(transports.${refName}.space = "${spaceLocalpart}"); rename the room or set transports.${refName}.space`,

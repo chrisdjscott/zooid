@@ -68,6 +68,10 @@ describe('agent room alias vs the workforce space alias', () => {
     expect(() => loadZooidConfig(cfg('', '["#dev:example.org"]'))).toThrow(/collides/)
   })
 
+  it('accepts #dev on another server, which cannot resolve to the space', () => {
+    expect(() => loadZooidConfig(cfg('', '["#dev:other.org"]'))).not.toThrow()
+  })
+
   it('rejects the alias of an explicit space', () => {
     expect(() => loadZooidConfig(cfg('    space: acme', '["#team", "#acme"]'))).toThrow(
       /rooms\[1\]: "#acme" collides with the workforce space alias \(transports\.matrix\.space = "acme"\)/,
