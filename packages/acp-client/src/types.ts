@@ -61,6 +61,8 @@ export interface PromptInput {
    */
   contextThreadId?: string
   content: ContentBlock[]
+  /** Sent as the ACP `_meta` of `session/prompt`. Omitted when unset. */
+  meta?: Record<string, unknown>
 }
 
 export interface PromptResult {

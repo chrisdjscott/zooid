@@ -36,7 +36,7 @@ function setup(
   timeline?: { root: unknown; thread: unknown[] },
 ) {
   const outbox: Wire[] = []
-  const prompts: Array<{ name: string; threadId: string; text: string }> = []
+  const prompts: Array<{ name: string; threadId: string; text: string; meta?: Record<string, unknown> }> = []
   const turnCount = new Map<string, number>()
   const gates = new Map<string, (r: 'released' | 'cancelled') => void>()
   let n = 0
@@ -57,12 +57,18 @@ function setup(
     prompt: vi.fn(
       async (
         name: string,
-        input: { threadId: string; contextThreadId: string; content: Array<{ text?: string }> },
+        input: {
+          threadId: string
+          contextThreadId: string
+          content: Array<{ text?: string }>
+          meta?: Record<string, unknown>
+        },
       ) => {
         prompts.push({
           name,
           threadId: input.threadId,
           text: input.content.map((c) => c.text ?? '').join(''),
+          meta: input.meta,
         })
         const i = turnCount.get(name) ?? 0
         turnCount.set(name, i + 1)
@@ -247,6 +253,19 @@ describe('handoff return timing ([[ZOD088]])', () => {
     expect(architectWake).toMatch(/^\[handoff return\] from coding\n/)
     expect(architectWake).toContain('done — PR #1 is ready')
     expect(architectWake).not.toContain('@ux:hs')
+  })
+
+  it('passes the message sender as prompt meta; a return wake carries none', async () => {
+    const h = setup({
+      architect: [async (e) => void (await e.handoff('coding', 'build the login page')), (e) => e.say('merged')],
+      coding: [(e) => e.say('done')],
+    })
+    await kickoff(h)
+    await h.settle()
+
+    expect(h.of('architect')).toHaveLength(2)
+    expect(h.of('architect')[0]!.meta).toEqual({ zooid: { sender: '@ori:hs' } })
+    expect(h.of('architect')[1]!.meta).toBeUndefined()
   })
 
   it('a callee running tools past the grace window does not wake its caller before its turn ends', async () => {

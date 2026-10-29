@@ -1438,6 +1438,9 @@ export function createMatrixTransport(opts: CreateMatrixTransportOptions) {
         channelId: roomId,
         contextThreadId: threadRoot,
         content: [...blocks, { type: 'text', text: fullPromptText }],
+        // Who wrote the message, for agents that keep per-person state.
+        // Synthetic turns (handoff returns, task completions) have no event.
+        ...(input.event?.sender ? { meta: { zooid: { sender: input.event.sender } } } : {}),
       })
       stopReason = promptResult.stopReason as StopReason
       turnId = promptResult.turnId

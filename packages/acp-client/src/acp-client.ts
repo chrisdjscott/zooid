@@ -616,7 +616,11 @@ export class AcpClient {
         })
         let finish!: () => void
         const completed = new Promise<void>((resolve) => { finish = resolve })
-        const result = this.connection!.prompt({ sessionId: id, prompt: input.content })
+        const result = this.connection!.prompt({
+          sessionId: id,
+          prompt: input.content,
+          ...(input.meta ? { _meta: input.meta } : {}),
+        })
         state.activeTurns.add(completed)
         void result.finally(() => {
           state.activeTurns.delete(completed)
