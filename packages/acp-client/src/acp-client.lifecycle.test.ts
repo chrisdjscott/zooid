@@ -67,6 +67,18 @@ describe('ACP session lifecycle', () => {
     for (const dir of dirs.splice(0)) rmSync(dir, { recursive: true, force: true })
   })
 
+  it('sends prompt meta as ACP _meta, and no _meta when unset', async () => {
+    const { client, connection } = fixture()
+    await client.prompt({ ...input('root'), meta: { zooid: { sender: '@ori:hs' } } })
+    await client.prompt(input('root'))
+    expect(connection.prompt.mock.calls[0]![0]).toEqual({
+      sessionId: 's1',
+      prompt: input('root').content,
+      _meta: { zooid: { sender: '@ori:hs' } },
+    })
+    expect(connection.prompt.mock.calls[1]![0]).not.toHaveProperty('_meta')
+  })
+
   it('closes an idle session, retains continuity, then resumes the same id', async () => {
     const { client, connection, lifecycle } = fixture()
     await client.prompt(input('root'))
